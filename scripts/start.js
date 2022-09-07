@@ -1,16 +1,22 @@
-import '../util/prod.js';
-import '../config/env.js';
-import appName from '../config/appName.js';
-import { rammerhead, website_build } from '../config/paths.js';
-import clearConsole from '../util/clearConsole.js';
 import address from 'address';
 import chalk from 'chalk';
-import cookie from 'cookie';
+import { spawn } from 'child_process';
+import { expand } from 'dotenv-expand';
+import { config } from 'dotenv-flow';
 import express from 'express';
 import proxy from 'express-http-proxy';
-import { fork, spawn } from 'node:child_process';
-import { createServer } from 'node:net';
-import { join } from 'node:path';
+import { createServer } from 'net';
+import { join } from 'path';
+import { websitePath } from 'website';
+
+// what a dotenv in a project like this serves: .env.local file containing developer port
+expand(config());
+
+function clearConsole() {
+	process.stdout.write(
+		process.platform === 'win32' ? '\x1B[2J\x1B[0f' : '\x1B[2J\x1B[3J\x1B[H'
+	);
+}
 
 console.log(`${chalk.cyan('Starting the server...')}\n`);
 
@@ -33,12 +39,12 @@ function tryBind(port, hostname) {
 }
 
 // root <= 1024
-const PORT_MIN = 1025;
-const PORT_MAX = 65536;
+const portMin = 1025;
+const portMax = 65536;
 
 async function createPort(hostname) {
 	for (let i = 0; i < 1000; i++) {
-		const port = ~~(Math.random() * (PORT_MAX - PORT_MIN)) + PORT_MIN;
+		const port = ~~(Math.random() * (portMax - portMin)) + portMin;
 
 		try {
 			await tryBind(port, hostname);
@@ -64,10 +70,10 @@ spawn('npx', ['bare-server-node'], {
 const rhPort = await createPort();
 const rhCrossDomainPort = await createPort();
 
-fork(join(rammerhead, 'src', 'server', 'index.js'), {
-	cwd: rammerhead,
+spawn('npx', ['rammerhead'], {
 	stdio: ['ignore', 'ignore', 'inherit', 'ipc'],
 	env: {
+		...process.env,
 		PORT: rhPort,
 		CROSS_DOMAIN_PORT: rhCrossDomainPort,
 	},
@@ -81,29 +87,13 @@ server.use(
 	})
 );
 
-const rammerhead_proxy = proxy(`http://127.0.0.1:${rhPort}`, {
+const rammerheadProxy = proxy(`http://127.0.0.1:${rhPort}`, {
 	proxyReqPathResolver: (req) =>
 		req.originalUrl.replace(/^\/[a-z0-9]{32}\/.*?:\/(?!\/)/, '$&/'),
 });
 
-const rammerhead_session = '/([a-z0-9]{32})*';
-
-server.use(rammerhead_session, (req, res, next) => {
-	if (req.headers['sec-fetch-mode'] === 'navigate') {
-		const cookies = cookie.parse(req.headers.cookie || '');
-
-		if (!('auth_proxy' in cookies)) {
-			res.status(401);
-			res.send('Unauthorized');
-			return;
-		}
-	}
-
-	next();
-});
-
 for (const url of [
-	rammerhead_session,
+	'/([a-z0-9]{32})*',
 	'/rammerhead.js',
 	'/hammerhead.js',
 	'/transport-worker.js',
@@ -119,15 +109,14 @@ for (const url of [
 	'/syncLocalStorage',
 	'/api/shuffleDict',
 ]) {
-	server.use(url, rammerhead_proxy);
+	server.use(url, rammerheadProxy);
 }
 
-server.use(express.static(website_build, { fallthrough: false }));
+server.use(express.static(websitePath, { fallthrough: false }));
 
 server.use((error, req, res, next) => {
-	if (error.statusCode === 404) {
-		return res.sendFile(join(website_build, '404.html'));
-	}
+	if (error.statusCode === 404)
+		return res.sendFile(join(websitePath, '404.html'));
 
 	next();
 });
@@ -169,7 +158,9 @@ try {
 
 server.listen(port, hostname, () => {
 	clearConsole();
-	console.log(`You can now view ${chalk.bold(appName)} in the browser.\n`);
+	console.log(
+		`You can now view ${chalk.bold('website-aio')} in the browser.\n`
+	);
 	console.log(
 		[
 			`  ${chalk.bold('Local:')}            ${urls.localUrlForTerminal}\n`,
